@@ -1,0 +1,89 @@
+version: '3.8'
+
+services:
+  mailserver:
+    image: ghcr.io/docker-mailserver/docker-mailserver:latest
+    container_name: mailserver
+    hostname: mail.ai-servicers.com
+    restart: unless-stopped
+    stop_grace_period: 1m
+    healthcheck:
+      test: ["CMD-SHELL", "ss --listening --ipv4 --tcp | grep --silent ':smtp' || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    env_file: $HOME/projects/secrets/docker-mailserver.env
+    # No ports exposed directly - Traefik handles all routing
+    # Traefik is already listening on ports 25, 587, 993
+    expose:
+      - "25"
+      - "143"
+      - "587"
+      - "993"
+    volumes:
+      - /home/administrator/projects/data/docker-mailserver/mail:/var/mail
+      - /home/administrator/projects/data/docker-mailserver/state:/var/mail-state
+      - ./config:/tmp/docker-mailserver
+      - /home/administrator/projects/data/traefik-certs/ai-servicers.com:/certs:ro
+      - /etc/localtime:/etc/localtime:ro
+    cap_add:
+      - NET_ADMIN
+    networks:
+      - mailserver-net
+      - traefik-net
+    labels:
+      # TCP routing for mail protocols via Traefik
+      - "traefik.enable=true"
+      - "traefik.docker.network=traefik-net"
+      # SMTP (port 25)
+      - "traefik.tcp.routers.mailserver-smtp.rule=HostSNI(`*`)"
+      - "traefik.tcp.routers.mailserver-smtp.entrypoints=smtp"
+      - "traefik.tcp.routers.mailserver-smtp.service=mailserver-smtp"
+      - "traefik.tcp.services.mailserver-smtp.loadbalancer.server.port=25"
+      # SUBMISSION (port 587)
+      - "traefik.tcp.routers.mailserver-submission.rule=HostSNI(`*`)"
+      - "traefik.tcp.routers.mailserver-submission.entrypoints=submission"
+      - "traefik.tcp.routers.mailserver-submission.service=mailserver-submission"
+      - "traefik.tcp.services.mailserver-submission.loadbalancer.server.port=587"
+      # SMTPS (port 465)
+      - "traefik.tcp.routers.mailserver-smtps.rule=HostSNI(`*`)"
+      - "traefik.tcp.routers.mailserver-smtps.entrypoints=smtps"
+      - "traefik.tcp.routers.mailserver-smtps.service=mailserver-smtps"
+      - "traefik.tcp.services.mailserver-smtps.loadbalancer.server.port=465"
+      # IMAPS (port 993)
+      - "traefik.tcp.routers.mailserver-imaps.rule=HostSNI(`*`)"
+      - "traefik.tcp.routers.mailserver-imaps.entrypoints=imaps"
+      - "traefik.tcp.routers.mailserver-imaps.service=mailserver-imaps"
+      - "traefik.tcp.services.mailserver-imaps.loadbalancer.server.port=993"
+
+  postfixadmin:
+    image: postfixadmin/postfixadmin:latest
+    container_name: postfixadmin
+    restart: unless-stopped
+    environment:
+      - POSTFIXADMIN_DB_TYPE=sqlite
+      - POSTFIXADMIN_SETUP_PASSWORD=${POSTFIXADMIN_SETUP_PASSWORD:-changeme123}
+      - POSTFIXADMIN_SMTP_SERVER=mailserver
+      - POSTFIXADMIN_SMTP_PORT=25
+      - POSTFIXADMIN_ENCRYPT=dovecot:BLF-CRYPT
+      - POSTFIXADMIN_DOMAIN=ai-servicers.com
+    volumes:
+      - /home/administrator/projects/data/docker-mailserver/postfixadmin:/var/lib/postfixadmin
+    networks:
+      - mailserver-net
+      - traefik-net
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.postfixadmin.rule=Host(`postfixadmin.ai-servicers.com`)"
+      - "traefik.http.routers.postfixadmin.entrypoints=websecure"
+      - "traefik.http.routers.postfixadmin.tls=true"
+      - "traefik.http.routers.postfixadmin.tls.certresolver=letsencrypt"
+      - "traefik.http.services.postfixadmin.loadbalancer.server.port=80"
+      # Add auth middleware for security
+      - "traefik.http.routers.postfixadmin.middlewares=auth@docker"
+
+networks:
+  mailserver-net:
+    external: true
+  traefik-net:
+    external: true
