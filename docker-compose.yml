@@ -67,7 +67,13 @@ services:
       - /home/administrator/projects/data/docker-mailserver/mail:/var/mail
       - /home/administrator/projects/data/docker-mailserver/state:/var/mail-state
       - ./config:/tmp/docker-mailserver
-      - /home/administrator/projects/data/traefik-certs/ai-servicers.com:/certs:ro
+      # Wildcard cert dir, not the apex-only "ai-servicers.com" dir: OVERRIDE_HOSTNAME
+      # above is mail.ai-servicers.com, and clients (Nextcloud Mail) verify that SAN.
+      # The dir name is literally "*.ai-servicers.com" — quoted because a plain YAML
+      # scalar starting with `*` is an alias reference; this string doesn't start
+      # with `*` so it isn't ambiguous, but quote it anyway so no future edit makes
+      # it one. Not a shell glob — Compose passes bind-mount sources through literally.
+      - "/home/administrator/projects/data/traefik-certs/*.ai-servicers.com:/certs:ro"
       - /etc/localtime:/etc/localtime:ro
     cap_add:
       - NET_ADMIN

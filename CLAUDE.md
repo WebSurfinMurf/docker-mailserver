@@ -38,9 +38,24 @@ the full design, verified log evidence, and open items — this section is the s
 
 ### SSL Configuration
 - **Type**: manual
-- **Certificates**: Let's Encrypt via Traefik
+- **Certificates**: Let's Encrypt via Traefik (`traefik-certs-dumper`, `file --domain-subdir`
+  mode — writes one directory per certificate under
+  `/home/administrator/projects/data/traefik-certs/`)
 - **Path**: `/certs/certificate.crt` and `/certs/privatekey.key`
-- **Mount**: `/home/administrator/projects/data/traefik-certs/ai-servicers.com:/certs:ro`
+- **Mount**: `"/home/administrator/projects/data/traefik-certs/*.ai-servicers.com:/certs:ro"`
+  — the **wildcard** cert dir, not the apex-only `ai-servicers.com` dir. Fixed 2026-07-28:
+  `mailserver`'s `OVERRIDE_HOSTNAME` is `mail.ai-servicers.com`, and clients that verify the
+  peer (Nextcloud Mail) need `mail.ai-servicers.com` in the SAN. The apex-only dir's cert has
+  SAN `ai-servicers.com` only and fails that verification; the wildcard dir's cert has SAN
+  `*.ai-servicers.com, ai-servicers.com` and covers it. Traefik's cert extraction was never
+  broken — it always wrote both dirs — `docker-compose.yml` was just pointed at the wrong one.
+  Two gotchas: the directory name is literally `*.ai-servicers.com` (a glob character in a
+  path — not a shell glob, Compose passes bind-mount sources through literally, but quote the
+  YAML string anyway since a plain scalar *starting* with `*` would otherwise be parsed as a
+  YAML alias); and this directory lives under `projects/data/traefik-certs/`, which is
+  hard-denied for writes by the destructive-guard hook — inspect it read-only via
+  `docker exec` into a container that already mounts it (e.g. `traefik-certs-dumper`), never
+  edit it directly.
 
 ## Architecture
 - **Container**: ghcr.io/docker-mailserver/docker-mailserver:latest, joined to
@@ -146,6 +161,17 @@ TCP passthrough. That path is confirmed dead now that `mailserver` carries no Do
 describes the *previously working* configuration, kept for reference; it is not currently
 functional and needs a Traefik-side fix (new label source, or a file-provider route to
 `mail-edge-wg`) that is out of scope for the edge/tunnel work described above.
+
+**Update 2026-07-28**: a *second*, independent blocker was diagnosed and fixed here — the
+certificate `mailserver` presented had SAN `ai-servicers.com` only (wrong bind-mount source
+dir; see SSL Configuration above), so peer-verifying clients rejected `mail.ai-servicers.com`
+regardless of which network path reached it. That's now fixed and verified (peer-verified TLS
+against `34.194.247.228:993` with SNI `mail.ai-servicers.com` succeeds). The Traefik LAN
+routing regression described in this section is unrelated and still open — but per the parent
+brief's inherited context, Nextcloud's container resolver returns the AWS Elastic IP for
+`mail.ai-servicers.com` (external DNS), not the LAN address, so it may not actually route
+through Traefik at all. Confirming that and any remaining Nextcloud-side config is out of
+scope for this project — belongs to the `projects/nextcloud` session.
 
 Nextcloud Mail app previously connected using:
 - **Server**: mail.ai-servicers.com
