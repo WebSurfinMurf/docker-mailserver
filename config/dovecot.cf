@@ -1,0 +1,18 @@
+# PROXY protocol (HAProxy v2) from the AWS mail edge - Dovecot side.
+#
+# Trust ONLY the edge's WireGuard tunnel address. A wider CIDR here would let any
+# host that can reach 993 spoof its own source IP via a forged PROXY header.
+haproxy_trusted_networks = 10.77.0.1/32
+haproxy_timeout = 3 secs
+
+# Only 993 is proxied - that is the sole IMAP port the edge forwards. Port 143
+# stays plain: it is bound inside the mail-edge-wg network namespace and is not
+# published to the host or LAN, so nothing external can reach it.
+#
+# Enabling haproxy on a listener makes the PROXY header MANDATORY for every
+# connection to it; 993 therefore serves edge traffic exclusively.
+service imap-login {
+  inet_listener imaps {
+    haproxy = yes
+  }
+}

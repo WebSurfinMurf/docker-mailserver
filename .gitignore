@@ -1,0 +1,6 @@
+
+# refocus session index (regenerated)
+docs/refocus/INDEX.md
+
+# DKIM private key material - never commit
+config/opendkim/

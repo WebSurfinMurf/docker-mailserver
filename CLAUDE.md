@@ -1,23 +1,35 @@
 # Docker-Mailserver Project
 
-## ✅ Current Status: FULLY OPERATIONAL
+> 🔀 **Session history (refocus)**: See [docs/refocus/INDEX.md](docs/refocus/INDEX.md) for incoming briefs and outbound spawns.
 
-Production mail server using Docker-Mailserver (single container solution) for ai-servicers.com domain.
-Successfully integrated with Nextcloud Mail app and accessible via external domain.
+## Current Status (2026-07-28): AWS edge live, MX not yet cut over
 
-## Working Configuration
+The stack was rebuilt behind an AWS edge (`~/projects/aws/mail-edge/`, Elastic IP
+`34.194.247.228`) because Verizon residential blocks inbound port 25 and lacks IP reputation
+for outbound delivery. See [`docs/aws-edge-integration.md`](docs/aws-edge-integration.md) for
+the full design, verified log evidence, and open items — this section is the summary.
+
+- `mailserver` and `mail-edge-wg` (containerized WireGuard peer) are both **up and healthy**.
+  `mailserver` joins `mail-edge-wg`'s network namespace via `network_mode:
+  service:mail-edge-wg` — it has no `networks:`/`ports:`/Traefik labels of its own; restarting
+  `mail-edge-wg` destroys that namespace and requires restarting `mailserver` afterward.
+- PROXY protocol (HAProxy v2) is configured on Postfix (`config/postfix-master.cf`, scoped
+  per-listener) and Dovecot (`config/dovecot.cf`, `haproxy_trusted_networks = 10.77.0.1/32`)
+  for all four edge-forwarded ports: 25, 465, 587, 993. **Verified working** — DMS logs show
+  the real client IP end-to-end, not the tunnel peer's.
+- **MX for `ai-servicers.com` still points at Cloudflare Email Routing.** No production mail
+  flows through this edge yet; cutover is a deliberate, separate human decision (not
+  automated). `mail.ai-servicers.com` currently resolves to the Elastic IP with Cloudflare's
+  proxy off, and was removed from `ddns-updater` so nothing overwrites it.
+- The Elastic IP's PTR record is still **pending** at AWS — do not send test mail to
+  third-party domains (Gmail, Outlook, etc.) until it resolves.
+- Legacy direct-Traefik-routing setup described below (SSL mount, Traefik TCP routing) is
+  **superseded** by the edge/tunnel path for anything reaching the mail ports via WireGuard;
+  Traefik still holds those host ports for non-edge traffic, but production intent is the edge.
 
 ### Mail Accounts
 - **websurfinmurf@ai-servicers.com** - Active and working
 - **michaelmurphy@ai-servicers.com** - Configured (legacy)
-
-### Access Methods
-- **External**: mail.ai-servicers.com (via Traefik with Let's Encrypt SSL)
-- **Internal**: mailserver (container name on Docker network)
-- **IMAP/SSL**: Port 993
-- **SMTP/STARTTLS**: Port 587
-- **Submission**: Port 587
-- **SMTP**: Port 25 (incoming)
 
 ### SSL Configuration
 - **Type**: manual
@@ -26,17 +38,22 @@ Successfully integrated with Nextcloud Mail app and accessible via external doma
 - **Mount**: `/home/administrator/projects/data/traefik-certs/ai-servicers.com:/certs:ro`
 
 ## Architecture
-- **Container**: ghcr.io/docker-mailserver/docker-mailserver:latest
-- **Management UI**: PostfixAdmin at postfixadmin.linuxserver.lan
+- **Container**: ghcr.io/docker-mailserver/docker-mailserver:latest, joined to
+  `mail-edge-wg`'s netns (see Current Status above) — no direct `mailserver-net`/`traefik-net`
+  attachment of its own.
+- **WireGuard peer**: `mail-edge-wg` (`lscr.io/linuxserver/wireguard`), dials out to the AWS
+  edge at `34.194.247.228:51820`; tunnel addresses `10.77.0.1` (edge) / `10.77.0.2` (home).
+- **Management UI**: PostfixAdmin at postfixadmin.ai-servicers.com
 - **Database**: PostgreSQL (shared instance) for PostfixAdmin
-- **Routing**: Through Traefik reverse proxy for external access
-- **Networks**: mailserver-net, traefik-net, postgres-net
+- **Networks**: `mailserver-net` (mail-edge-wg, postfixadmin), `traefik-net` (postfixadmin only)
 
 ## Configuration Files
 - `$HOME/projects/secrets/docker-mailserver.env` - Main environment configuration
+- `$HOME/projects/secrets/mail-edge-wg.conf` - WireGuard peer config (mode 600)
 - `config/postfix-accounts.cf` - Account configuration (managed by setup command)
 - `config/postfix-virtual.cf` - Virtual aliases configuration
-- `config/dovecot/` - Custom Dovecot configurations
+- `config/postfix-master.cf` - PROXY protocol overrides (Postfix side)
+- `config/dovecot.cf` - PROXY protocol overrides (Dovecot side)
 
 ## Key Environment Settings
 ```env
@@ -177,47 +194,30 @@ docker exec mailserver doveadm auth test user@ai-servicers.com password
 
 ## Known Issues & Limitations
 
-### 🔴 CRITICAL: Incoming Mail Blocked by ISP
-**Problem**: Verizon (and most residential ISPs) block incoming port 25
-**Impact**: Cannot receive external email (Gmail, etc.)
-**Current Workaround**: None - incoming mail does not work
+### 🟡 Port 25 ISP block — workaround BUILT, not yet cut over
+**Problem**: Verizon (and most residential ISPs) block incoming port 25.
+**Solution built**: an AWS edge (Elastic IP + HAProxy, `~/projects/aws/mail-edge/`) tunnelled
+home over WireGuard with PROXY protocol preserving the real client IP — see
+[`docs/aws-edge-integration.md`](docs/aws-edge-integration.md). This superseded the older
+AWS-SES+Lambda and VPS-relay options once considered (both listed below for history; neither
+was built).
+**Why it isn't live yet**: MX still points at Cloudflare Email Routing, and the Elastic IP's
+PTR record is still pending at AWS. Cutover is a deliberate human decision, not automated.
 
 **Status of Email Functions:**
 - ✅ **Sending mail**: Works via SendGrid relay
 - ✅ **Internal mail**: Between local users works
 - ✅ **IMAP access**: Nextcloud can read local mail
-- ❌ **Receiving external mail**: BLOCKED by ISP
+- ✅ **Edge tunnel + PROXY protocol**: built and verified (real client IP confirmed in logs)
+- ⬜ **Receiving external mail via the edge**: mechanism works end-to-end technically, but
+  MX cutover hasn't happened — no production mail flows through it yet
 
-### Port 25 Workaround Solutions
-
-#### Option 1: AWS SES + Lambda (Recommended)
-**Full implementation plan available**: `/home/administrator/projects/AINotes/PORT25-WORKAROUND.md`
-
-**How it works:**
-1. AWS SES receives mail on port 25 (in AWS cloud)
-2. Lambda function forwards to home server on port 2525
-3. Docker-Mailserver accepts forwarded mail
-4. Nextcloud Mail shows received emails
-
-**Cost**: ~$1-2/month
-**Complexity**: Medium
-**Benefits**: Full control, no Gmail dependency
-
-#### Option 2: VPS Mail Relay
-- Rent VPS from DigitalOcean/Vultr ($6/month)
-- Run mail relay on VPS
-- Forward to home on alternate port
-
-#### Option 3: Cloudflare Email Routing (Free)
-- Forward to Gmail/other email provider
-- Loses independence goal
-- But free and works immediately
-
-### Why Port 25 is Blocked
-- ISPs block to prevent spam from residential connections
-- Cannot be bypassed with port forwarding
-- Email protocol requires port 25 for receiving
-- No alternative ports for incoming SMTP
+### Historical options considered (not built)
+- **AWS SES + Lambda**: SES receives on 25 in-cloud, Lambda forwards to home on 2525. Not
+  chosen — the WireGuard+HAProxy edge gives more control over PROXY protocol/IP preservation.
+- **VPS mail relay** (DigitalOcean/Vultr, ~$6/mo): superseded by the AWS edge.
+- **Cloudflare Email Routing** (free, forward-only): still what MX points at today — it's the
+  current fallback, not a rejected option.
 
 ## Troubleshooting
 

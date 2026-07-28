@@ -1,0 +1,22 @@
+# PROXY protocol (HAProxy v2) from the AWS mail edge.
+#
+# Every connection reaching these listeners arrives through the WireGuard tunnel
+# from HAProxy on 34.194.247.228, which prepends a PROXY v2 header carrying the
+# REAL client IP. Without this, Postfix would attribute every connection to the
+# tunnel peer 10.77.0.1, collapsing Rspamd/SpamAssassin scoring, Postgrey
+# greylisting and Fail2ban onto a single address.
+#
+# Scoped per-service ON PURPOSE. Do NOT set postscreen_upstream_proxy_protocol /
+# smtpd_upstream_proxy_protocol in postfix-main.cf: that would apply globally and
+# make the internal 127.0.0.1:10025 amavis reinjection listener demand a PROXY
+# header it will never receive, breaking local delivery.
+#
+# A listener with this enabled REQUIRES a PROXY header on every connection - it
+# cannot also serve plain TCP. That is why Traefik is out of the mail data path.
+#
+# Port 25 is fronted by postscreen (master.cf: `smtp inet ... postscreen`), so it
+# takes the postscreen_ variant; 587/465 are plain smtpd and take the smtpd_ one.
+# Verified 2026-07-28: the edge sends PROXY v2 on all four of 25/465/587/993.
+smtp/inet/postscreen_upstream_proxy_protocol=haproxy
+submission/inet/smtpd_upstream_proxy_protocol=haproxy
+submissions/inet/smtpd_upstream_proxy_protocol=haproxy
