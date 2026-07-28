@@ -118,8 +118,13 @@ about account management changes under the edge.
 ## Current stack state (2026-07-28)
 
 - **Live and verified.** `mail-edge-wg` and `mailserver` are both up and healthy; the tunnel
-  passed a bidirectional ping test and survives container restart (`restart: unless-stopped`,
-  healthcheck-gated `depends_on`).
+  passed a bidirectional ping test and both containers auto-start on host reboot
+  (`restart: unless-stopped`). **Recovery from a `mail-edge-wg` restart is manual, not
+  automatic**: `depends_on: condition: service_healthy` only orders container start —
+  restarting `mail-edge-wg` alone destroys the shared network namespace, and `mailserver`
+  keeps running inside the now-orphaned netns rather than being restarted by Docker. The
+  `mailserver` healthcheck detects this (it checks for a live `wg0`, not just an open port),
+  but detection ≠ recovery — restart `mailserver` by hand afterward.
 - PROXY protocol is configured and confirmed working on all four edge-forwarded ports. Direct
   evidence from `docker logs mailserver`, same day:
   - `postfix/postscreen: CONNECT from [108.35.80.85]:54332 to [10.60.1.79]:25` (port 25)
@@ -129,9 +134,17 @@ about account management changes under the edge.
 
   In every case the logged address is the real Verizon client IP, not the tunnel peer
   `10.77.0.1` — proof the PROXY header is being read, not just accepted.
-- Traefik still owns `0.0.0.0:{25,465,587,993}` on the host for anything reaching it directly;
-  it does not conflict with DMS because DMS never publishes those ports to the host — it binds
-  them only inside the `mail-edge-wg` network namespace, reachable exclusively via the tunnel.
+- Traefik still binds `0.0.0.0:{25,465,587,993}` on the host (no port conflict with DMS, which
+  never publishes those ports to the host — it binds them only inside the `mail-edge-wg`
+  netns). But **Traefik's TCP routers for mail were discovered from Docker labels on the old
+  `mailserver` container, which no longer has any** (`network_mode: service:*` forbids
+  labels). Confirmed broken: `mail.ai-servicers.com:993` now TLS-handshakes against Traefik's
+  cert but returns `HTTP/1.1 400 Bad Request` instead of proxying IMAP — Traefik has no
+  matching router and is falling through to its HTTP stack. **This means any client that
+  reached DMS via Traefik before this refactor (e.g. Nextcloud Mail at
+  `mail.ai-servicers.com:993`/`:587`) is currently broken**, not just theoretically at risk.
+  Fixing it is a Traefik-project change (new label source or a file-provider route pointing at
+  `mail-edge-wg`) — out of scope for this brief; see `suggested_follow_ups`.
 - **MX for `ai-servicers.com` still points at Cloudflare Email Routing, not this edge.** No
   production mail flows through this path yet — cutting over is a separate, later, human
   decision (DNS changes are explicitly out of scope for the work that built this).

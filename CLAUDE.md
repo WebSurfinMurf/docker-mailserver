@@ -23,9 +23,14 @@ the full design, verified log evidence, and open items — this section is the s
   proxy off, and was removed from `ddns-updater` so nothing overwrites it.
 - The Elastic IP's PTR record is still **pending** at AWS — do not send test mail to
   third-party domains (Gmail, Outlook, etc.) until it resolves.
-- Legacy direct-Traefik-routing setup described below (SSL mount, Traefik TCP routing) is
-  **superseded** by the edge/tunnel path for anything reaching the mail ports via WireGuard;
-  Traefik still holds those host ports for non-edge traffic, but production intent is the edge.
+- 🔴 **Regression: Traefik's TCP routing to mail is currently broken**, and with it internal
+  clients that relied on it (e.g. Nextcloud Mail at `mail.ai-servicers.com:993`/`:587`).
+  Traefik discovered mail routers from Docker labels on the old `mailserver` container;
+  `network_mode: service:*` forbids labels on the new one, so those routers no longer exist.
+  Confirmed: `mail.ai-servicers.com:993` now TLS-handshakes then returns
+  `HTTP/1.1 400 Bad Request` instead of proxying IMAP. See "Traefik TCP Routing" below and
+  `docs/aws-edge-integration.md` for detail. Fixing this is a Traefik-project change, not done
+  here.
 
 ### Mail Accounts
 - **websurfinmurf@ai-servicers.com** - Active and working
@@ -134,8 +139,15 @@ cd /home/administrator/projects/docker-mailserver
 
 ## Integration with Nextcloud
 
-### Working Configuration
-Nextcloud Mail app successfully connects using:
+### 🔴 Currently broken (2026-07-28) — see Current Status above
+Nextcloud Mail previously connected via `mail.ai-servicers.com:993`/`:587` through Traefik's
+TCP passthrough. That path is confirmed dead now that `mailserver` carries no Docker labels
+(`network_mode: service:*` forbids them) — Traefik has no router to send it to. This section
+describes the *previously working* configuration, kept for reference; it is not currently
+functional and needs a Traefik-side fix (new label source, or a file-provider route to
+`mail-edge-wg`) that is out of scope for the edge/tunnel work described above.
+
+Nextcloud Mail app previously connected using:
 - **Server**: mail.ai-servicers.com
 - **IMAP**: Port 993 with SSL
 - **SMTP**: Port 587 with STARTTLS
@@ -148,15 +160,21 @@ Due to ASUS router NAT reflection, Nextcloud container has:
 - Hosts entry mapping mail.ai-servicers.com → 172.22.0.17
 - This allows internal Docker routing while using external domain name
 
-## Traefik TCP Routing
-All mail ports are routed through Traefik with TLS passthrough:
+## Traefik TCP Routing — 🔴 broken, not currently in effect
+Previously all mail ports were routed through Traefik with TLS passthrough via Docker labels
+on the `mailserver` container:
 ```yaml
-TCP Services:
+TCP Services (as previously configured, no longer discovered):
 - Port 25 (SMTP) → Container port 25
-- Port 587 (Submission) → Container port 587  
+- Port 587 (Submission) → Container port 587
 - Port 993 (IMAPS) → Container port 993
 - Port 465 (SMTPS) → Container port 465
 ```
+`mailserver` no longer has these labels (or any `networks:`/`ports:`) since it moved to
+`network_mode: service:mail-edge-wg` for the AWS edge integration. Traefik still listens on
+these host ports but has no matching router — confirmed via
+`openssl s_client -connect mail.ai-servicers.com:993`, which TLS-handshakes then gets
+`HTTP/1.1 400 Bad Request` instead of an IMAP banner.
 
 ## PostfixAdmin Integration
 - Web UI at https://postfixadmin.linuxserver.lan (internal only)
@@ -205,9 +223,13 @@ was built).
 PTR record is still pending at AWS. Cutover is a deliberate human decision, not automated.
 
 **Status of Email Functions:**
-- ✅ **Sending mail**: Works via SendGrid relay
+- ✅ **Sending mail**: SendGrid relay connectivity reverified 2026-07-28 (TLS handshake ok
+  from inside `mailserver`); path unaffected since WireGuard `AllowedIPs` is scoped to
+  `10.77.0.0/24`, not general egress
 - ✅ **Internal mail**: Between local users works
-- ✅ **IMAP access**: Nextcloud can read local mail
+- 🔴 **IMAP access via Nextcloud**: BROKEN as of 2026-07-28 — see "Currently broken" note in
+  Integration with Nextcloud, below. Was working before the edge refactor removed Traefik's
+  route to `mailserver`.
 - ✅ **Edge tunnel + PROXY protocol**: built and verified (real client IP confirmed in logs)
 - ⬜ **Receiving external mail via the edge**: mechanism works end-to-end technically, but
   MX cutover hasn't happened — no production mail flows through it yet
