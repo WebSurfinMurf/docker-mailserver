@@ -25,6 +25,23 @@
   (perm-denied for the `administrator` user). [IMPLEMENTED] `.gitignore`d as `config/opendkim/`
   — never commit private key material.
 
+## TLS certificate source
+- [IMPLEMENTED] `mailserver`'s cert bind mount points at Traefik's **wildcard** cert dir:
+  `"/home/administrator/projects/data/traefik-certs/*.ai-servicers.com:/certs:ro"`
+  (quoted — the dir name is literally `*.ai-servicers.com`; not a shell glob, Compose passes
+  bind-mount sources through literally, but an unquoted plain YAML scalar *starting* with `*`
+  would be parsed as a YAML alias).
+- `traefik-certs-dumper` (`file --domain-subdir` mode) writes one dir per cert under that same
+  parent, including a separate apex-only `ai-servicers.com/` dir (SAN `ai-servicers.com` only)
+  — do not point at that one. `OVERRIDE_HOSTNAME=mail.ai-servicers.com` requires the wildcard's
+  SAN (`*.ai-servicers.com, ai-servicers.com`) to pass peer-verifying clients (Nextcloud Mail).
+- The parent `traefik-certs/` dir is under `projects/data/`, hard-denied for writes by the
+  destructive-guard hook. Inspect read-only via `docker exec` into a container that already
+  mounts it (e.g. `traefik-certs-dumper`); never edit it directly.
+- Verifying the fix requires actual hostname verification, not just chain trust:
+  `openssl s_client ... -verify_hostname mail.ai-servicers.com` (not `-verify N` alone, which
+  only checks the chain and would pass identically against the wrong-SAN cert too).
+
 ## Verification commands used
 ```bash
 docker logs mailserver 2>&1 | grep -i 'postscreen\|submission.*smtpd\|submissions.*smtpd\|imap-login'

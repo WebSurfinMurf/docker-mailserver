@@ -22,6 +22,15 @@
   receive a PROXY header — breaking local delivery. Scope the directives in
   `postfix-master.cf` per listener instead.
 
+- **`openssl s_client -verify N` only checks chain trust, not hostname match.** It will report
+  `verify return:1` and complete the handshake against a cert whose SAN doesn't cover the name
+  you connected as — `-servername` only sets SNI, it doesn't assert the match. This is exactly
+  how `mailserver` served a cert with SAN `ai-servicers.com` only (missing
+  `mail.ai-servicers.com`) for a while without any verification command catching it. Use
+  `-verify_hostname <name>` to actually assert the match, and prove the flag is biting with a
+  negative control (`-verify_hostname nope.example.com` should fail) before trusting a green
+  result. Fixed 2026-07-28 — see `operations.md` TLS certificate source.
+
 - **DKIM private key material lives under `config/opendkim/keys/`, owned by `root` inside the
   container** — unreadable by the host `administrator` user, and `.gitignore`d
   (`config/opendkim/`). Don't try to `git add` it; it'll fail with a permission error, and it
