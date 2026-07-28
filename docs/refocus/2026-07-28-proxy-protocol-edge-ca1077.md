@@ -1,12 +1,12 @@
 ---
 id: 2026-07-28-proxy-protocol-edge-ca1077
-status: in-progress
+status: result
 child_session_id: 4887fea5-78a1-4b14-a071-ae362ca71a13
 spawn_mode: execute
 tier: medium
 spawned_at: 2026-07-28T13:30:00Z
 launched_at: 2026-07-28T13:53:00Z
-completed_at: null
+completed_at: 2026-07-28T14:30:00Z
 source_dir: /home/administrator/projects/aws
 source_session_id: 700184f3-55a6-4052-b9fa-225f8550bc2e
 dest_dir: /home/administrator/projects/docker-mailserver
@@ -124,4 +124,75 @@ Then run `/refocus-complete`. Keep it tight — this is a documentation pass, no
 ---
 
 ## Result
-<empty until child writes>
+
+**Status:** completed
+
+**Definition-of-Done met:**
+- ✓ WireGuard tunnel up, bidirectional (verified by parent pre-handoff: `wg show` + ping
+  10.77.0.1↔10.77.0.2). Survives restart via `restart: unless-stopped` on both containers
+  (not a host `wg-quick@wg0` unit — WireGuard runs in its own container, `mail-edge-wg`, with
+  `mailserver` joining its netns via `network_mode: service:mail-edge-wg`; the parent
+  explicitly endorsed this choice over host installation in the brief above).
+- ✓ `mailserver` running with PROXY protocol enabled on all four edge-forwarded ports
+  (25/465/587/993) — `config/postfix-master.cf` (scoped per-listener, not global) and
+  `config/dovecot.cf` (`haproxy_trusted_networks = 10.77.0.1/32`).
+- ✓ Real client IP confirmed in DMS logs on **all four ports**, independently reverified this
+  session (not just carried over from the parent's port-25-only check):
+  `postscreen: CONNECT from [108.35.80.85]... to [10.60.1.79]:25`,
+  `submission/smtpd: connect from ...fios.verizon.net[108.35.80.85]` (587),
+  `submissions/smtpd: connect from ...fios.verizon.net[108.35.80.85]` (465),
+  `dovecot: imap-login: ... rip=108.35.80.85, lip=10.60.1.79` (993).
+- ✓ `docs/aws-edge-integration.md` corrected: port table now shows direct 25/465/587/993 (no
+  10025-style remap — the netns-sharing design needs none), PROXY-directive locations fixed
+  to match the actual `postfix-master.cf`/`dovecot.cf` content, DNS/test-plan sections
+  reframed as target-state vs. verified-today.
+- ✓ `CLAUDE.md` status corrected: replaced "FULLY OPERATIONAL"/"PRODUCTION READY" with a
+  dated 2026-07-28 status reflecting the edge/tunnel architecture, verified evidence, and the
+  MX-not-cut-over caveat.
+
+**Summary:** The AWS mail edge's home half is live: a containerized WireGuard peer
+(`mail-edge-wg`) tunnels to the Elastic IP, `mailserver` shares its network namespace and
+terminates PROXY-protocol v2 connections on 25/465/587/993, and the real client IP is
+confirmed end-to-end in Postfix and Dovecot logs — the core deliverable. Both integration docs
+were rewritten to match what was actually built rather than the earlier 10025-port sketch.
+MX still points at Cloudflare Email Routing (unchanged, out of scope) and the Elastic IP's
+PTR is still pending, so no production mail flows through this path yet.
+
+An advisor review of the first documentation pass caught two inaccuracies before they shipped,
+both now corrected: (1) the doc claimed `mail-edge-wg` restarts auto-recover `mailserver` —
+false, recovery is manual and only *detected* by a healthcheck; (2) it silently carried
+forward a stale "✅ Nextcloud IMAP works" claim. Investigating that second point surfaced a
+real regression (see follow-up below), now documented rather than hidden.
+
+**Artifacts produced:**
+- `docs/aws-edge-integration.md` — corrected port table, PROXY-directive locations, DNS/test
+  status, restart-recovery semantics, Traefik-routing regression note.
+- `CLAUDE.md` — corrected top-level status, Nextcloud/Traefik sections marked broken with
+  evidence, historical Port-25-workaround section reframed as built-not-cutover.
+- `.gitignore` — added `config/opendkim/` (DKIM private key material was untracked and
+  unreadable by the deploy user; now excluded rather than left as an accidental omission).
+- Two commits on `main`: `bd0a86c` (edge integration + doc rewrite) and `6ad8bcb` (accuracy
+  corrections after advisor review).
+
+**Suggested follow-ups (parent decides):**
+- `~/projects/traefik`, slug `mail-tcp-routing-dead` — 🔴 regression, not pre-existing: since
+  `mailserver` moved to `network_mode: service:mail-edge-wg` it carries no Docker labels, so
+  Traefik's TCP routers for mail (previously label-discovered) no longer exist. Confirmed via
+  `mail.ai-servicers.com:993` TLS-handshaking then returning `HTTP/1.1 400 Bad Request`
+  instead of an IMAP banner. This breaks Nextcloud Mail's existing IMAP/SMTP integration
+  (`mail.ai-servicers.com:993`/`:587`), which worked before this branch's changes. Needs a
+  Traefik-side fix: either a new label source pointed at `mail-edge-wg`, or a file-provider
+  TCP route. Left un-fixed here per the leaf/1-hop rule and because it's Traefik-project
+  scope, not docker-mailserver.
+
+**Material changes (for /context-save):**
+- `docs/context/architecture.md` (or equivalent): `mailserver` now runs inside
+  `mail-edge-wg`'s network namespace (`network_mode: service:*`), not on `mailserver-net`/
+  `traefik-net` directly; no Docker labels/ports of its own.
+- `docs/context/operations.md`: restarting `mail-edge-wg` requires manually restarting
+  `mailserver` afterward — not automatic; healthcheck only detects the orphaned-netns state.
+- `docs/context/interfaces.md`: PROXY protocol v2 required on 25/465/587/993, trusted source
+  restricted to `10.77.0.1/32`; port 143 stays plain/internal-only.
+- `docs/context/gotchas.md`: Traefik's mail TCP routing is currently dead (see follow-up
+  above) — anything depending on `mail.ai-servicers.com:993`/`:587` via Traefik is broken
+  until that's fixed elsewhere.
