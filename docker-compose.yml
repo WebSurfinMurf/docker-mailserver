@@ -15,6 +15,12 @@ services:
   mail-edge-wg:
     image: lscr.io/linuxserver/wireguard:1.0.20260223-r0-ls118
     container_name: mail-edge-wg
+    # LAN-only plain IMAP for in-house mail clients.
+    # 25/465/587/993 all mandate PROXY protocol (edge-only); a local client cannot
+    # speak it, so 143 + STARTTLS is the local read path. Bound to the LAN address
+    # explicitly so plain IMAP is never exposed to the internet.
+    ports:
+      - "192.168.1.13:143:143"
     restart: unless-stopped
     cap_add:
       - NET_ADMIN
