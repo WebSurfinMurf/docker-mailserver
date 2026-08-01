@@ -35,3 +35,18 @@
   container** — unreadable by the host `administrator` user, and `.gitignore`d
   (`config/opendkim/`). Don't try to `git add` it; it'll fail with a permission error, and it
   should never be committed anyway.
+
+- **`mta-sts.ai-servicers.com` already resolves (via the zone's `*.ai-servicers.com` wildcard
+  CNAME → `home.ai-servicers.com`) but has no Traefik router — it 404s.** Don't mistake DNS
+  resolution for HTTPS reachability. The MTA-STS policy file is authored at
+  `mta-sts-policy/.well-known/mta-sts.txt` (mode: testing) but the `_mta-sts` TXT record is
+  deliberately unpublished until a Traefik route exists to serve it — publishing the TXT record
+  first would advertise a policy nothing can fetch (RFC 8461 §3 fail-closed behavior). See
+  `docs/mail-dns-posture.md`.
+
+- **CAA is a trap, not a free win.** Certificate Transparency shows a live
+  `*.ai-servicers.com` cert issued by Google Trust Services (Cloudflare Universal SSL for the
+  proxied apex) alongside the Let's Encrypt certs this project uses. A CAA record scoped to
+  Let's Encrypt only would silently break that renewal (~60-day lead time) and Cloudflare can
+  rotate its Universal SSL CA at any time. Do not add CAA without accounting for both issuers.
+  See `docs/mail-dns-posture.md`.

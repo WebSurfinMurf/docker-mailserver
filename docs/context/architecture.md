@@ -27,3 +27,5 @@
 ## See also
 - `docs/aws-edge-integration.md` — full edge design + verified evidence.
 - `docs/refocus/2026-07-28-proxy-protocol-edge-ca1077.md` — the session that built this.
+- `docs/mail-dns-posture.md` — canonical SPF/DKIM/DMARC/MTA-STS/TLS-RPT record for
+  `ai-servicers.com`, including why DMARC stays at `p=none` and why CAA/DNSSEC are absent.

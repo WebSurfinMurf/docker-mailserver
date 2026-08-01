@@ -1,12 +1,12 @@
 ---
 id: 2026-08-01-mail-tls-reporting-c12924
-status: in-progress
+status: result
 child_session_id: c12924ec-8f49-4fc8-b116-6807ccdd5d86
 spawn_mode: execute
 tier: low
 spawned_at: 2026-08-01T00:55:00Z
 launched_at: 2026-08-01T01:20:26Z
-completed_at: null
+completed_at: 2026-08-01T01:30:00Z
 source_dir: /home/administrator/projects/aws
 source_session_id: 6d3304c3-976c-4e69-a644-3d3b7c5f91d5
 dest_dir: /home/administrator/projects/docker-mailserver
@@ -87,7 +87,31 @@ hosted policy file, so it is prepared here and published only when that hosting 
 ---
 
 ## Result
-<empty until child writes>
+
+### Status
+- completed
+
+### Definition-of-Done met
+- ✅ TLS-RPT TXT record published at `_smtp._tls.ai-servicers.com` (`v=TLSRPTv1; rua=mailto:tlsrpt@ai-servicers.com`) and verified live via two independent public resolvers (1.1.1.1, 8.8.8.8).
+- ✅ MTA-STS policy authored (`mode: testing`) at `mta-sts-policy/.well-known/mta-sts.txt`, with hosting instructions written in `docs/mail-dns-posture.md`. The `_mta-sts` TXT record was deliberately **not** published — live `curl` to `https://mta-sts.ai-servicers.com/.well-known/mta-sts.txt` returned HTTP 404 (the wildcard CNAME reaches the home Traefik edge, but no router exists for that hostname), so publishing the TXT record now would advertise an unreachable policy.
+- ✅ Mail DNS posture documented canonically in `docs/mail-dns-posture.md`: SPF, DKIM selectors (mail/s1/s2/brevo1/brevo2), DMARC (`p=none`, why it stays that way — three authorized senders), MTA-STS, TLS-RPT, and explicit rationale for leaving CAA and DNSSEC absent.
+- ✅ Every change verified by live query, not API response alone: TLS-RPT via `dig @1.1.1.1`/`@8.8.8.8`; MTA-STS hosting absence via `curl` HTTP 404; full zone enumerated via Cloudflare API (16 records, matches inherited context) before any write.
+
+### Summary
+Published a TLS-RPT record pointing at an in-house mailbox (`tlsrpt@ai-servicers.com`, resolved via the existing `@ai-servicers.com` catch-all to `websurfinmurf@ai-servicers.com` — no third-party aggregator, no new mailbox). Authored an MTA-STS policy in testing mode but confirmed via live HTTPS request that `mta-sts.ai-servicers.com` has no Traefik router yet (404), so per the brief's explicit ordering rule the `_mta-sts` TXT record was withheld — publishing it now would have advertised a policy nothing can fetch. Wrote `docs/mail-dns-posture.md` as the canonical mail DNS record, covering all five controls plus the CAA/DNSSEC exclusion rationale carried over from the brief. All out-of-scope items (DMARC, CAA, DNSSEC, SPF/MX/DKIM, aws/traefik/cicd directories) were left untouched. Changes committed and pushed to `origin/main` (`32faa88`).
+
+### Artifacts produced
+- `docs/mail-dns-posture.md` — canonical mail DNS posture record (SPF/DKIM/DMARC/MTA-STS/TLS-RPT, three-sender rationale, CAA/DNSSEC exclusion rationale, verification commands).
+- `mta-sts-policy/.well-known/mta-sts.txt` — MTA-STS policy file, `mode: testing`, ready to be served once hosting exists.
+- `_smtp._tls.ai-servicers.com` TXT record — live in Cloudflare (zone `ai-servicers.com`).
+
+### Suggested follow-ups (parent decides)
+- **`~/projects/traefik`**, slug `mta-sts-policy-hosting` — add a Traefik router (+ minimal static file server, or file-provider route) for host `mta-sts.ai-servicers.com` serving this repo's `mta-sts-policy/.well-known/mta-sts.txt` over the existing wildcard cert. Once live, publish `_mta-sts.ai-servicers.com TXT "v=STSv1; id=<unique>"` — a one-line Cloudflare API call, not itself a Traefik change, but gated on Traefik's routing landing first.
+- No other cross-directory work surfaced. DMARC enforcement remains an explicit owner decision (per `out_of_scope`), not a follow-up to auto-spawn.
+
+### Material changes (for /context-save)
+- **interfaces or architecture** (`docs/context/`): the mail DNS posture (SPF/DKIM/DMARC/MTA-STS/TLS-RPT, three authorized senders, CAA/DNSSEC exclusion) is now canonical at `docs/mail-dns-posture.md` — worth a one-line pointer from `docs/context/architecture.md` or `interfaces.md` so future sessions discover it without grepping `docs/`.
+- **gotchas**: MTA-STS hosting is blocked on a Traefik-side router for `mta-sts.ai-servicers.com` that doesn't exist yet (wildcard CNAME resolves but 404s) — this is the reason the `_mta-sts` TXT record isn't published; a future session should not "fix" this by publishing the TXT record without first confirming the hosting follow-up landed.
 
 <!--
 When the child completes, /refocus-complete appends here:
